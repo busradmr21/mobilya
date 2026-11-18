@@ -12,10 +12,12 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // PostgreSQL bağlantısı
+        // PostgreSQL bağlantısı (Hem standart ConnectionString hem de bulut DATABASE_URL formatını destekler)
+        var connectionString = GetNpgsqlConnectionString(configuration);
+
         services.AddDbContext<AppDbContext>(options =>
             options.UseNpgsql(
-                configuration.GetConnectionString("DefaultConnection"),
+                connectionString,
                 npgsql => npgsql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName)
             ));
 
@@ -39,5 +41,37 @@ public static class ServiceCollectionExtensions
         .AddDefaultTokenProviders();
 
         return services;
+    }
+
+    private static string GetNpgsqlConnectionString(IConfiguration configuration)
+    {
+        var connStr = configuration.GetConnectionString("DefaultConnection") 
+                      ?? configuration["DATABASE_URL"];
+
+        if (string.IsNullOrWhiteSpace(connStr))
+            return string.Empty;
+
+        // Bulut sağlayıcıların verdiği postgres:// veya postgresql:// URI formatını Npgsql formatına dönüştürür
+        if (connStr.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+            connStr.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var uri = new Uri(connStr);
+                var userInfo = uri.UserInfo.Split(':');
+                var username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "";
+                var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
+                var port = uri.Port > 0 ? uri.Port : 5432;
+                var database = uri.AbsolutePath.TrimStart('/');
+
+                return $"Host={uri.Host};Port={port};Database={database};Username={username};Password={password};SSL Mode=Prefer;Trust Server Certificate=true";
+            }
+            catch
+            {
+                return connStr;
+            }
+        }
+
+        return connStr;
     }
 }
